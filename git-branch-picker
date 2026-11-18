@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# git-branch-picker.sh
+# Lists up to 15 git branches and lets the user interactively pick one to checkout.
+#
+
+set -euo pipefail
+
+# --- Sanity check: must be inside a git repo ---
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: not inside a git repository." >&2
+    exit 1
+fi
+
+# --- Gather branches (local + remote, excluding HEAD pointers) ---
+mapfile -t branches < <(
+    git branch --all --format='%(refname:short)' --sort=-committerdate \
+        | grep -v '^origin/HEAD$' \
+        | head -n 15
+)
+
+if [[ ${#branches[@]} -eq 0 ]]; then
+    echo "No branches found." >&2
+    exit 1
+fi
+
+# --- Display the menu ---
+echo
+echo "Available branches (showing up to 15):"
+echo "-------------------------------------"
+for i in "${!branches[@]}"; do
+    printf "  %2d) %s\n" "$((i + 1))" "${branches[$i]}"
+done
+echo "-------------------------------------"
+
+# --- Interactive prompt loop ---
+while true; do
+    read -r -p "Enter the number of the branch to checkout (or 'q' to quit): " choice
+
+    # Quit
+    if [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    # Validate: must be a positive integer within range
+    if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
+        echo "Invalid input: please enter a number." >&2
+        continue
+    fi
+
+    if (( choice < 1 || choice > ${#branches[@]} )); then
+        echo "Invalid input: choose a number between 1 and ${#branches[@]}." >&2
+        continue
+    fi
+
+    selected="${branches[$((choice - 1))]}"
+    break
+done
+
+# --- Checkout ---
+echo
+echo "Checking out: $selected"
+
+# If it's a remote-only branch (e.g. origin/feature), create a tracking local branch
+if git show-ref --verify --quiet "refs/heads/$selected"; then
+    # Local branch exists
+    git checkout "$selected"
+elif git show-ref --verify --quiet "refs/remotes/$selected"; then
+    # Remote branch → create a local tracking branch with the same short name
+    local_name="${selected#origin/}"
+    git checkout -b "$local_name" --track "$selected"
+else
+    echo "Error: branch '$selected' not found." >&2
+    exit 1
+fi
+
+echo "✅ Now on branch: $(git rev-parse --abbrev-ref HEAD)"
+
+
